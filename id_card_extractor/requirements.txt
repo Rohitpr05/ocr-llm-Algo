@@ -1,0 +1,7 @@
+openai
+langchain
+python-docx
+pytesseract
+Pillow
+opencv-python
+PyMuPDF
