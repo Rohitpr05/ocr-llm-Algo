@@ -1,6 +1,6 @@
 import re
 import json
-from langchain.schema import HumanMessage
+from langchain_core.messages import HumanMessage
 
 class AadhaarExtractor:
     def __init__(self, llm):

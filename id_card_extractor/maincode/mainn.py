@@ -7,7 +7,7 @@ from PIL import Image
 import pytesseract
 import fitz  # PyMuPDF
 from langchain_openai import ChatOpenAI
-from langchain.schema import HumanMessage
+from langchain_core.messages import HumanMessage
 import json
 import re
 import platform
