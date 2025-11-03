@@ -8,7 +8,7 @@ if defined _OLD_CODEPAGE (
     "%SystemRoot%\System32\chcp.com" 65001 > nul
 )
 
-set VIRTUAL_ENV=C:\Users\rprtu\OneDrive\Desktop\ocr llm\id_card_extractor\ocr_env
+set VIRTUAL_ENV=C:\Users\rprtu\OneDrive\Desktop\Novares_legals\ocr llm\id_card_extractor\ocr_env
 
 if not defined PROMPT set PROMPT=$P$G
 
