@@ -1,11 +1,7 @@
-"""
-Optimized Main Entry Point for ID Card Extractor
-Replaces: maincode/mainn.py
-"""
 import os
 import sys
 from pathlib import Path
-from typing import Optional, Dict, Any, Union, List
+from typing import Optional, Dict, Any, List
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from PIL import Image
@@ -24,8 +20,9 @@ from card_structure.adhaar import AadhaarExtractor
 from card_structure.pan import PANExtractor
 from card_structure.passport import PassportExtractor
 
-# Load environment variables
-load_dotenv(Path(__file__).parent.parent / "ocr_env" / ".env")
+# Load environment variables from ocr_env/.env
+env_path = Path(__file__).parent.parent / "ocr_env" / ".env"
+load_dotenv(env_path)
 
 class OptimizedDocumentExtractor:
     """Optimized document extraction engine"""
@@ -43,10 +40,15 @@ class OptimizedDocumentExtractor:
                     pytesseract.pytesseract.tesseract_cmd = path
                     break
         
-        # Initialize LLM
-        api_key = "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"
+        # Get API key from environment
+        api_key = os.getenv("OPENROUTER_API_KEY")
+        
         if not api_key:
-            raise ValueError("OPENROUTER_API_KEY not found in environment variables")
+            print("❌ API key not found in ocr_env/.env file")
+            print("   Please add: OPENROUTER_API_KEY=your_key")
+            raise ValueError("OPENROUTER_API_KEY not found")
+        
+        print(f"🔑 Using API key: {api_key[:20]}...{api_key[-10:]}")
         
         self.llm = ChatOpenAI(
             model=os.getenv("LLM_MODEL", "anthropic/claude-3-haiku"),
@@ -68,20 +70,14 @@ class OptimizedDocumentExtractor:
         try:
             img_array = np.array(image)
             
-            # Convert to grayscale
             if len(img_array.shape) == 3:
                 gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
             else:
                 gray = img_array
             
-            # Denoise
             denoised = cv2.medianBlur(gray, 3)
-            
-            # Enhance contrast
             clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
             enhanced = clahe.apply(denoised)
-            
-            # Adaptive thresholding
             thresh = cv2.adaptiveThreshold(
                 enhanced, 255, 
                 cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
@@ -90,7 +86,6 @@ class OptimizedDocumentExtractor:
             
             return Image.fromarray(thresh)
         except Exception as e:
-            print(f"⚠️  Preprocessing failed: {e}, using original")
             return image
     
     def extract_text_ocr(self, image: Image.Image) -> str:
@@ -99,15 +94,14 @@ class OptimizedDocumentExtractor:
             image = image.convert('RGB')
         
         ocr_configs = [
-            '--psm 6 -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz /,-.',
-            '--psm 4',
             '--psm 6',
+            '--psm 4',
+            '--psm 11',
         ]
         
         best_text = ""
         max_length = 0
         
-        # Try original image first
         for config in ocr_configs:
             try:
                 text = pytesseract.image_to_string(image, config=config).strip()
@@ -120,7 +114,6 @@ class OptimizedDocumentExtractor:
             except:
                 continue
         
-        # Try preprocessed if needed
         if max_length < 30:
             processed = self.preprocess_image(image)
             for config in ocr_configs[:2]:
@@ -138,20 +131,16 @@ class OptimizedDocumentExtractor:
     def detect_document_type(self, text: str) -> str:
         """Detect document type from text"""
         import re
-        
         text_lower = text.lower()
         
-        # Aadhaar patterns
         if (re.search(r'\b\d{4}\s*\d{4}\s*\d{4}\b', text) or 
             any(k in text_lower for k in ['aadhaar', 'aadhar', 'uid'])):
             return 'aadhaar'
         
-        # PAN patterns
         if (re.search(r'\b[A-Z]{5}\d{4}[A-Z]\b', text) or 
             'pan' in text_lower or 'permanent account' in text_lower):
             return 'pan'
         
-        # Passport patterns
         if (re.search(r'\b[A-Z]\d{7}\b', text) or 
             'passport' in text_lower or 'republic of india' in text_lower):
             return 'passport'
@@ -181,18 +170,6 @@ class OptimizedDocumentExtractor:
                 "data": {},
                 "error": str(e)
             }
-    
-    def load_image_from_url(self, url: str) -> Optional[Image.Image]:
-        """Load image from URL"""
-        try:
-            print(f"🔗 Downloading from URL...")
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            response = requests.get(url, headers=headers, timeout=30)
-            response.raise_for_status()
-            return Image.open(BytesIO(response.content))
-        except Exception as e:
-            print(f"❌ URL download failed: {e}")
-            return None
     
     def load_image_from_file(self, file_path: str) -> Optional[Image.Image]:
         """Load image from file"""
@@ -225,35 +202,27 @@ class OptimizedDocumentExtractor:
         
         return images
     
-    def is_url(self, path: str) -> bool:
-        """Check if path is URL"""
-        return path.startswith(('http://', 'https://'))
-    
     def process_single_image(self, image: Image.Image, source: str = "Image") -> Dict[str, Any]:
         """Process single image"""
         print(f"\n{'='*60}")
         print(f"🔍 Processing: {source}")
         print(f"{'='*60}")
         
-        # Resize if too large
         width, height = image.size
         if width > 2000 or height > 2000:
             ratio = min(2000 / width, 2000 / height)
             new_size = (int(width * ratio), int(height * ratio))
             image = image.resize(new_size, Image.Resampling.LANCZOS)
         
-        # Extract text
         raw_text = self.extract_text_ocr(image)
         
         if not raw_text or len(raw_text) < 5:
             print("❌ Insufficient text extracted")
             return {"error": "Insufficient text", "raw_text": raw_text}
         
-        # Detect type
         doc_type = self.detect_document_type(raw_text)
         print(f"📋 Document Type: {doc_type.upper()}")
         
-        # Extract structured data
         structured = self.extract_structured_data(raw_text, doc_type)
         
         confidence = structured.get("confidence", "unknown")
@@ -273,26 +242,17 @@ class OptimizedDocumentExtractor:
     
     def process_input(self, input_path: str) -> Dict[str, Any]:
         """Process any input type"""
-        # Load image(s)
-        if self.is_url(input_path):
-            image = self.load_image_from_url(input_path)
-            if image is None:
-                return {"error": "Failed to load from URL"}
-            return self.process_single_image(image, "URL")
-        
         path = Path(input_path)
         if not path.exists():
             return {"error": f"File not found: {input_path}"}
         
         ext = path.suffix.lower()
         
-        # PDF
         if ext == '.pdf':
             images = self.load_images_from_pdf(str(path))
             if not images:
                 return {"error": "No images from PDF"}
             
-            # Process all pages, return best
             results = []
             for i, img in enumerate(images):
                 result = self.process_single_image(img, f"PDF Page {i+1}")
@@ -302,14 +262,12 @@ class OptimizedDocumentExtractor:
             if not results:
                 return {"error": "No successful extractions"}
             
-            # Return highest confidence
             best = max(results, key=lambda x: {
                 "high": 3, "medium": 2, "low": 1
             }.get(x.get("extracted_data", {}).get("confidence", "low"), 0))
             
             return best
         
-        # Image file
         elif ext in ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.gif']:
             image = self.load_image_from_file(str(path))
             if image is None:
@@ -327,18 +285,13 @@ def main_run(input_path: str, save_output: bool = True):
         print("🚀 ID CARD EXTRACTOR - STARTING")
         print("="*60 + "\n")
         
-        # Create extractor
         extractor = OptimizedDocumentExtractor()
-        
-        # Process input
         result = extractor.process_input(input_path)
         
-        # Check for errors
         if "error" in result:
             print(f"\n❌ ERROR: {result['error']}\n")
             return result
         
-        # Save output if requested
         if save_output and "extracted_data" in result:
             output_dir = Path(__file__).parent / "extracted_data"
             output_dir.mkdir(exist_ok=True)
@@ -368,18 +321,14 @@ def main_run(input_path: str, save_output: bool = True):
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
-        # Command line argument provided
         input_path = sys.argv[1]
         main_run(input_path)
     else:
-        # Interactive mode - ask for file path
         print("\n" + "="*60)
         print("🚀 ID CARD EXTRACTOR - INTERACTIVE MODE")
         print("="*60 + "\n")
         
         input_path = input("📁 Drop or paste your file path here: ").strip()
-        
-        # Remove quotes if user dragged file (Windows adds quotes)
         input_path = input_path.strip('"').strip("'")
         
         if not input_path:
