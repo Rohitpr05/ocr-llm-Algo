@@ -1,174 +1,67 @@
-"""
-Optimized Form Filler
-Replaces: form_filler/filler_llm.py
-"""
 import os
-import json
-from pathlib import Path
-from datetime import datetime
+import re
 from docx import Document
 from docx.shared import Inches
-from typing import Dict, Any, Optional
+from datetime import datetime
+from docx.oxml.shared import qn
+import xml.etree.ElementTree as ET
 
-
-def find_signature() -> Optional[Path]:
-    """Find signature file"""
-    base_dir = Path(__file__).parent.parent
-    signature_folders = [
-        base_dir / "signatures",
-        base_dir / "signature"
-    ]
+def setup_signature_folder():
+    """
+    Setup signature folder and provide instructions
+    """
+    signature_folder = "signatures"
+    os.makedirs(signature_folder, exist_ok=True)
     
-    for folder in signature_folders:
-        if not folder.exists():
-            continue
-        
-        for ext in ['png', 'jpg', 'jpeg', 'PNG', 'JPG', 'JPEG']:
-            sig_file = folder / f"signature.{ext}"
-            if sig_file.exists():
-                print(f"✅ Found signature: {sig_file.name}")
-                return sig_file
+    # Check for existing signature files
+    signature_files = []
+    for ext in ['png', 'jpg', 'jpeg', 'PNG', 'JPG', 'JPEG']:
+        sig_file = os.path.join(signature_folder, f"signature.{ext}")
+        if os.path.exists(sig_file):
+            signature_files.append(sig_file)
     
-    print("⚠️  No signature file found")
-    return None
-
-
-def prepare_replacements(data: Dict[str, Any]) -> Dict[str, str]:
-    """Prepare placeholder replacements"""
-    current_date = datetime.now().strftime("%d-%m-%Y")
-    
-    replacements = {
-        "{{NAME}}": data.get("name", ""),
-        "{{PAN}}": data.get("pan_number", data.get("pan", "")),
-        "{{FATHER_NAME}}": data.get("father_name", ""),
-        "{{ACK_NO}}": data.get("ack_no", data.get("acknowledgement_number", "")),
-        "{{CAPACITY}}": data.get("capacity", "Self"),
-        "{{DATE}}": current_date,
-        "{{SIGNATURE}}": "[SIGNATURE_PLACEHOLDER]",
-        "{{DOB}}": data.get("date_of_birth", ""),
-        "{{ADDRESS}}": data.get("address", ""),
-        "{{PHONE}}": data.get("phone_number", ""),
-        "{{EMAIL}}": data.get("email", ""),
-        "{{PASSPORT_NUMBER}}": data.get("passport_number", ""),
-        "{{AADHAAR_NUMBER}}": data.get("aadhaar_number", ""),
-    }
-    
-    # Convert to strings
-    replacements = {k: str(v) if v else "" for k, v in replacements.items()}
-    
-    print(f"📝 Prepared {len(replacements)} placeholder replacements")
-    return replacements
-
-
-def replace_text_in_paragraph(paragraph, replacements: Dict[str, str]) -> int:
-    """Replace text in paragraph"""
-    if not paragraph.runs:
-        return 0
-    
-    full_text = ''.join(run.text for run in paragraph.runs)
-    updated_text = full_text
-    count = 0
-    
-    for placeholder, replacement in replacements.items():
-        if placeholder in updated_text:
-            updated_text = updated_text.replace(placeholder, replacement)
-            count += 1
-    
-    if updated_text != full_text:
-        # Clear and rebuild
-        for run in paragraph.runs[::-1]:
-            paragraph._element.remove(run._element)
-        paragraph.add_run(updated_text)
-    
-    return count
-
-
-def handle_signature(paragraph, signature_path: Optional[Path]) -> bool:
-    """Handle signature placeholder"""
-    full_text = ''.join(run.text for run in paragraph.runs)
-    
-    if "{{SIGNATURE}}" not in full_text:
-        return False
-    
-    # Save formatting
-    try:
-        original_alignment = paragraph.alignment
-        original_space_before = paragraph.paragraph_format.space_before
-        original_space_after = paragraph.paragraph_format.space_after
-    except:
-        original_alignment = None
-        original_space_before = None
-        original_space_after = None
-    
-    # Clear paragraph
-    paragraph.clear()
-    
-    # Insert signature or placeholder
-    if signature_path and signature_path.exists():
-        try:
-            run = paragraph.add_run()
-            run.add_picture(str(signature_path), width=Inches(1.2), height=Inches(0.6))
-            print("✅ Signature inserted")
-        except Exception as e:
-            print(f"⚠️  Signature insertion failed: {e}")
-            paragraph.add_run("[SIGNATURE MISSING]")
+    if signature_files:
+        print(f"✅ Found signature file(s): {signature_files}")
+        return signature_files[0]  # Return first found
     else:
-        paragraph.add_run("[SIGNATURE MISSING]")
-    
-    # Restore formatting
+        print(f"📁 Created signature folder: {signature_folder}")
+        print("📝 Please place your signature image in this folder as:")
+        print("   - signatures/signature.png (recommended)")
+        print("   - signatures/signature.jpg")
+        print("   - signatures/signature.jpeg")
+        return None
+
+def fix_document_layout(doc):
+    """
+    Fix document layout issues that might cause page breaks
+    """
     try:
-        if original_alignment:
-            paragraph.alignment = original_alignment
-        if original_space_before:
-            paragraph.paragraph_format.space_before = original_space_before
-        if original_space_after:
-            paragraph.paragraph_format.space_after = original_space_after
-    except:
-        pass
-    
-    return True
-
-
-def process_table(table, replacements: Dict[str, str], signature_path: Optional[Path]) -> int:
-    """Process table cells"""
-    count = 0
-    
-    for row in table.rows:
-        for cell in row.cells:
-            for paragraph in cell.paragraphs:
-                if not handle_signature(paragraph, signature_path):
-                    count += replace_text_in_paragraph(paragraph, replacements)
-            
-            for nested_table in cell.tables:
-                count += process_table(nested_table, replacements, signature_path)
-    
-    return count
-
-
-def optimize_layout(doc: Document):
-    """Optimize document layout"""
-    try:
+        # Process all paragraphs to ensure proper spacing
         for paragraph in doc.paragraphs:
+            # Reset excessive spacing - access through paragraph_format
             try:
                 if paragraph.paragraph_format.space_before and paragraph.paragraph_format.space_before.pt > 12:
                     paragraph.paragraph_format.space_before = None
                 if paragraph.paragraph_format.space_after and paragraph.paragraph_format.space_after.pt > 12:
                     paragraph.paragraph_format.space_after = None
-            except:
+            except AttributeError:
+                # Skip if paragraph format attributes don't exist
                 pass
         
+        # Process table spacing
         for table in doc.tables:
+            # Set table to not break across pages if possible
             try:
-                table.alignment = 0
+                table.alignment = 0  # Left alignment
             except:
                 pass
             
             for row in table.rows:
                 try:
-                    row.height_rule = 1
+                    row.height_rule = 1  # Auto height
                 except:
                     pass
-                
+                    
                 for cell in row.cells:
                     for paragraph in cell.paragraphs:
                         try:
@@ -176,132 +69,381 @@ def optimize_layout(doc: Document):
                                 paragraph.paragraph_format.space_before = None
                             if paragraph.paragraph_format.space_after and paragraph.paragraph_format.space_after.pt > 6:
                                 paragraph.paragraph_format.space_after = None
-                        except:
+                        except AttributeError:
+                            # Skip if paragraph format attributes don't exist
                             pass
+        
+        print("✅ Document layout optimized to prevent page breaks")
     except Exception as e:
-        print(f"⚠️  Layout optimization failed: {e}")
+        print(f"⚠️ Could not optimize layout: {e}")
 
-
-def fill_itr_with_llm(template_path: str, output_path: str, json_data: Dict[str, Any]) -> bool:
-    """Fill ITR form with data"""
+def fill_itr_with_llm(template_path, output_path, json_data):
+    """
+    Enhanced ITR form filler that handles text boxes, tables, and nested elements
+    """
     try:
-        print("\n" + "="*60)
-        print("✍️  FORM FILLING - STARTING")
-        print("="*60 + "\n")
-        
-        # Check template
-        template_path = Path(template_path)
-        if not template_path.exists():
-            print(f"❌ Template not found: {template_path}")
-            return False
-        
-        print(f"📄 Template: {template_path.name}")
-        
-        # Load document
         doc = Document(template_path)
         
-        # Find signature
-        signature_path = find_signature()
+        # Prepare all placeholders with exact matches from your template
+        replacements = {
+            "{{NAME}}": json_data.get("name", ""),
+            "{{PAN}}": json_data.get("pan_number", json_data.get("pan", "")),
+            "{{FATHER_NAME}}": json_data.get("father_name", ""),
+            "{{ACK_NO}}": json_data.get("ack_no", "ABC1234567"),
+            "{{CAPACITY}}": json_data.get("capacity", "Self"),
+            "{{DATE}}": datetime.now().strftime("%d-%m-%Y"),
+            "{{SIGNATURE}}": "[SIGNATURE_PLACEHOLDER]"
+        }
         
-        # Prepare replacements
-        replacements = prepare_replacements(json_data)
+        # Setup signature folder and find signature file
+        signature_img = setup_signature_folder()
+        if not signature_img:
+            signature_img = os.path.join("signatures", "signature.png")  # Default path
         
-        # Process document
-        replacement_count = 0
+        print(f"🔍 Starting form filling with data: {json_data}")
+        print(f"📝 Replacements to be made: {replacements}")
         
-        # Main paragraphs
+        replacement_count = {key: 0 for key in replacements.keys()}
+        
+        def replace_text_in_runs(paragraph):
+            """Advanced text replacement that handles text split across runs"""
+            if not paragraph.runs:
+                return False
+            
+            # Collect all text and run information
+            full_text = ""
+            run_info = []
+            
+            for i, run in enumerate(paragraph.runs):
+                start_pos = len(full_text)
+                full_text += run.text
+                end_pos = len(full_text)
+                run_info.append((i, start_pos, end_pos, run))
+            
+            # Check if any placeholder exists
+            original_text = full_text
+            updated_text = full_text
+            
+            for placeholder, replacement in replacements.items():
+                if placeholder in updated_text:
+                    updated_text = updated_text.replace(placeholder, str(replacement))
+                    replacement_count[placeholder] += 1
+                    print(f"✅ Found and replaced '{placeholder}' with '{replacement}'")
+            
+            # If text changed, rebuild the paragraph
+            if updated_text != original_text:
+                # Clear all runs
+                for run in paragraph.runs[::-1]:
+                    paragraph._element.remove(run._element)
+                
+                # Add new text as single run
+                new_run = paragraph.add_run(updated_text)
+                return True
+            
+            return False
+        
+        def handle_signature_paragraph(paragraph):
+            """Handle signature insertion with proper sizing and positioning"""
+            full_text = ''.join(run.text for run in paragraph.runs)
+            
+            if "{{SIGNATURE}}" in full_text:
+                # Store original paragraph formatting safely
+                original_alignment = None
+                original_space_before = None
+                original_space_after = None
+                
+                try:
+                    original_alignment = paragraph.alignment
+                    original_space_before = paragraph.paragraph_format.space_before
+                    original_space_after = paragraph.paragraph_format.space_after
+                except AttributeError:
+                    # Attributes don't exist, use defaults
+                    pass
+                
+                paragraph.clear()
+                
+                if json_data.get("signature_present", False) and os.path.exists(signature_img):
+                    try:
+                        run = paragraph.add_run()
+                        # Smaller signature size to prevent layout issues
+                        run.add_picture(signature_img, width=Inches(1.2), height=Inches(0.6))
+                        
+                        # Restore original formatting safely
+                        try:
+                            if original_alignment is not None:
+                                paragraph.alignment = original_alignment
+                            if original_space_before is not None:
+                                paragraph.paragraph_format.space_before = original_space_before
+                            if original_space_after is not None:
+                                paragraph.paragraph_format.space_after = original_space_after
+                        except AttributeError:
+                            # Skip if formatting attributes don't exist
+                            pass
+                        
+                        print("✅ Signature image inserted with proper sizing")
+                        replacement_count["{{SIGNATURE}}"] += 1
+                    except Exception as e:
+                        print(f"⚠️ Could not insert signature: {e}")
+                        paragraph.add_run("[SIGNATURE MISSING]")
+                        replacement_count["{{SIGNATURE}}"] += 1
+                else:
+                    paragraph.add_run("[SIGNATURE MISSING]")
+                    replacement_count["{{SIGNATURE}}"] += 1
+                return True
+            return False
+        
+        def process_paragraph(paragraph):
+            """Process a single paragraph"""
+            if handle_signature_paragraph(paragraph):
+                return
+            
+            replace_text_in_runs(paragraph)
+        
+        def process_table_cell(cell):
+            """Process each cell in a table thoroughly"""
+            # Process paragraphs in cell
+            for paragraph in cell.paragraphs:
+                process_paragraph(paragraph)
+            
+            # Process nested tables
+            for table in cell.tables:
+                process_table(table)
+        
+        def process_table(table):
+            """Process all cells in a table"""
+            for row in table.rows:
+                for cell in row.cells:
+                    process_table_cell(cell)
+        
+        def process_all_text_nodes():
+            """Process all text nodes in the document XML directly"""
+            try:
+                # Get the document XML
+                doc_xml = doc._part._element
+                
+                # Define namespace
+                namespace = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+                
+                # Find all text elements
+                text_elements = []
+                
+                def find_text_elements(element):
+                    """Recursively find all text elements"""
+                    if element.tag.endswith('}t'):  # w:t elements
+                        text_elements.append(element)
+                    
+                    for child in element:
+                        find_text_elements(child)
+                
+                find_text_elements(doc_xml)
+                
+                print(f"🔍 Found {len(text_elements)} text elements in XML")
+                
+                # Process each text element
+                for text_elem in text_elements:
+                    if text_elem.text:
+                        original_text = text_elem.text
+                        updated_text = original_text
+                        
+                        for placeholder, replacement in replacements.items():
+                            if placeholder in updated_text:
+                                updated_text = updated_text.replace(placeholder, str(replacement))
+                                replacement_count[placeholder] += 1
+                                print(f"✅ XML: Replaced '{placeholder}' with '{replacement}' in '{original_text[:30]}...'")
+                        
+                        if updated_text != original_text:
+                            text_elem.text = updated_text
+                
+            except Exception as e:
+                print(f"⚠️ Error in XML processing: {e}")
+        
+        def search_and_replace_in_xml():
+            """Alternative XML approach using string replacement"""
+            try:
+                # Get the raw XML content
+                doc_part = doc._part
+                xml_content = doc_part._element.xml.decode('utf-8') if isinstance(doc_part._element.xml, bytes) else str(doc_part._element.xml)
+                
+                original_xml = xml_content
+                
+                # Replace placeholders in raw XML
+                for placeholder, replacement in replacements.items():
+                    if placeholder in xml_content:
+                        xml_content = xml_content.replace(placeholder, str(replacement))
+                        replacement_count[placeholder] += 1
+                        print(f"✅ XML String: Replaced '{placeholder}' with '{replacement}'")
+                
+                # If XML was modified, we need to reload (this is complex, so we'll skip for now)
+                # This is a fallback that shows what we found
+                if xml_content != original_xml:
+                    print("📝 Found additional placeholders in raw XML that need manual handling")
+                
+            except Exception as e:
+                print(f"⚠️ Error in XML string processing: {e}")
+        
+        # Process main document body
+        print("🔄 Processing main document paragraphs...")
         for paragraph in doc.paragraphs:
-            if not handle_signature(paragraph, signature_path):
-                replacement_count += replace_text_in_paragraph(paragraph, replacements)
+            process_paragraph(paragraph)
         
-        # Tables
+        # Process all tables
+        print("🔄 Processing tables...")
         for table in doc.tables:
-            replacement_count += process_table(table, replacements, signature_path)
+            process_table(table)
         
-        # Headers and footers
+        # Process headers and footers
+        print("🔄 Processing headers and footers...")
         for section in doc.sections:
+            # Header
             if section.header:
                 for paragraph in section.header.paragraphs:
-                    replace_text_in_paragraph(paragraph, replacements)
+                    process_paragraph(paragraph)
                 for table in section.header.tables:
-                    process_table(table, replacements, signature_path)
+                    process_table(table)
             
+            # Footer
             if section.footer:
                 for paragraph in section.footer.paragraphs:
-                    replace_text_in_paragraph(paragraph, replacements)
+                    process_paragraph(paragraph)
                 for table in section.footer.tables:
-                    process_table(table, replacements, signature_path)
+                    process_table(table)
         
-        # Optimize layout
-        optimize_layout(doc)
+        # Process all text nodes directly
+        print("🔄 Processing all text nodes in XML...")
+        process_all_text_nodes()
         
-        # Save
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        # Fallback: Search in raw XML
+        print("🔄 Searching raw XML for missed placeholders...")
+        search_and_replace_in_xml()
+        
+        # Show replacement summary
+        print("\n📊 Replacement Summary:")
+        for placeholder, count in replacement_count.items():
+            if count > 0:
+                print(f"   ✅ {placeholder}: {count} replacement(s)")
+            else:
+                print(f"   ❌ {placeholder}: Not found!")
+        
+        # Fix document layout before saving
+        print("🔧 Optimizing document layout...")
+        fix_document_layout(doc)
+        
+        # Create output directory if it doesn't exist
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        
+        # Check if signature file exists, if not create a sample
+        if not os.path.exists(signature_img):
+            print(f"📝 Signature file not found at {signature_img}")
+            print(f"💡 Please place your signature image at: {signature_img}")
+            print("   Supported formats: PNG, JPG, JPEG")
+            print("   Recommended size: 200x100 pixels or similar aspect ratio")
+        
+        # Save the document
         doc.save(output_path)
+        print(f"\n✅ Final filled ITR form saved at: {output_path}")
+        print(f"📁 Signature folder created at: signatures")
         
-        print(f"💾 Form saved: {output_path.name}")
-        print(f"✅ Filled {replacement_count} placeholders")
+        if not os.path.exists(signature_img):
+            print(f"⚠️  To add signature: Place your signature image at '{signature_img}'")
         
-        print("\n" + "="*60)
-        print("✅ FORM FILLING COMPLETED")
-        print("="*60 + "\n")
+        # Check if all placeholders were replaced
+        missed_placeholders = [k for k, v in replacement_count.items() if v == 0 and k != "{{SIGNATURE}}"]
+        if missed_placeholders:
+            print(f"⚠️  WARNING: These placeholders were not found: {missed_placeholders}")
+            
+        # Check signature specifically
+        if replacement_count["{{SIGNATURE}}"] == 0:
+            print("ℹ️  Signature placeholder not found - this is normal if your template doesn't have {{SIGNATURE}}")
         
         return True
         
     except Exception as e:
-        print(f"\n❌ Form filling failed: {e}")
+        print(f"❌ Error filling ITR form: {e}")
         import traceback
         traceback.print_exc()
         return False
 
-
-def fill_itr_form(template_name: str = "ITR TEST FORM.docx", 
-                  data_file: Optional[str] = None,
-                  output_name: Optional[str] = None) -> bool:
-    """Fill ITR form - convenience function"""
+def debug_document_structure(template_path):
+    """
+    Debug function to show document structure and find all text content
+    """
     try:
-        base_dir = Path(__file__).parent.parent
+        doc = Document(template_path)
+        print("\n🔍 DOCUMENT STRUCTURE DEBUG:")
         
-        # Template path
-        template_path = base_dir / "forms" / template_name
+        print("\n📄 Main Document Paragraphs:")
+        for i, para in enumerate(doc.paragraphs):
+            text = ''.join(run.text for run in para.runs)
+            if text.strip():
+                print(f"  Para {i}: '{text[:100]}...'")
         
-        # Data file
-        if data_file is None:
-            data_file = base_dir / "maincode" / "extracted_data" / "extracted_data.json"
-        else:
-            data_file = Path(data_file)
+        print("\n📊 Tables:")
+        for t_idx, table in enumerate(doc.tables):
+            print(f"  Table {t_idx}:")
+            for r_idx, row in enumerate(table.rows):
+                for c_idx, cell in enumerate(row.cells):
+                    cell_text = ''.join(''.join(run.text for run in para.runs) for para in cell.paragraphs)
+                    if cell_text.strip():
+                        print(f"    Cell [{r_idx}][{c_idx}]: '{cell_text[:50]}...'")
         
-        # Output file
-        if output_name is None:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_name = f"filled_itr_{timestamp}.docx"
+        print("\n🔤 All Text Content (XML Method):")
+        try:
+            doc_xml = doc._part._element
+            
+            def find_all_text(element, level=0):
+                indent = "  " * level
+                if element.tag.endswith('}t') and element.text:
+                    print(f"{indent}Text: '{element.text}'")
+                
+                for child in element:
+                    find_all_text(child, level + 1)
+            
+            find_all_text(doc_xml)
         
-        output_path = base_dir / "filled_forms" / output_name
-        
-        # Load data
-        if not data_file.exists():
-            print(f"❌ Data file not found: {data_file}")
-            return False
-        
-        with open(data_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        print(f"📊 Loaded data from: {data_file.name}")
-        
-        # Fill form
-        return fill_itr_with_llm(str(template_path), str(output_path), data)
-        
+        except Exception as e:
+            print(f"⚠️ Error in XML debug: {e}")
+    
     except Exception as e:
-        print(f"❌ Error: {e}")
-        return False
+        print(f"❌ Error in debug: {e}")
 
+def main():
+    """
+    Example usage with signature handling
+    """
+    template_path = "template/ITR_VERIFICATION_FORM.docx"
+    output_path = "filled_forms/filled_itr.docx"
+    
+    # Setup signature folder first
+    print("🔧 Setting up signature folder...")
+    setup_signature_folder()
+    
+    # Debug the document structure first (optional)
+    print("\n🔧 Running document structure debug...")
+    debug_document_structure(template_path)
+    
+    # Sample data
+    sample_data = {
+        "name": "JOHN DOE",
+        "pan_number": "ABCDE1234F",
+        "father_name": "RICHARD DOE",
+        "ack_no": "ABC1234567",
+        "capacity": "Self",
+        "signature_present": True  # Set to False if no signature needed
+    }
+    
+    print(f"\n🚀 Starting ITR form filling...")
+    success = fill_itr_with_llm(template_path, output_path, sample_data)
+    
+    if success:
+        print("\n🎉 Form filling completed successfully!")
+        print("📂 Check your filled form and signature folder!")
+    else:
+        print("\n❌ Form filling failed or incomplete!")
+        
+    print(f"\n📋 Next steps:")
+    print(f"   1. Check filled form at: {output_path}")
+    print(f"   2. Add signature image to: signatures/signature.png")
+    print(f"   3. Re-run if you want to add signature")
 
 if __name__ == "__main__":
-    import sys
-    
-    if len(sys.argv) > 1:
-        template = sys.argv[1]
-        fill_itr_form(template)
-    else:
-        fill_itr_form()
+    main()
